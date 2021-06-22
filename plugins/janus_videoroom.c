@@ -1012,7 +1012,7 @@ room-<unique room ID>: {
 	"private_id" : <unique ID of the publisher that originated this request; optional, unless mandated by the room configuration>,
 	"streams" : [
 		{
-			"feed_id" : <unique ID of publisher owning the stream to subscribe to>,
+			"feed" : <unique ID of publisher owning the stream to subscribe to>,
 			"mid" : "<unique mid of the publisher stream to subscribe to; optional>"
 			// Optionally, simulcast or SVC targets (defaults if missing)
 		},
@@ -1126,7 +1126,7 @@ room-<unique room ID>: {
 	"request" : "subscribe",
 	"streams" : [
 		{
-			"feed_id" : <unique ID of publisher owning the new stream to subscribe to>,
+			"feed" : <unique ID of publisher owning the new stream to subscribe to>,
 			"mid" : "<unique mid of the publisher stream to subscribe to; optional>"
 			// Optionally, simulcast or SVC targets (defaults if missing)
 		},
@@ -1179,7 +1179,7 @@ room-<unique room ID>: {
 	"request" : "unsubscribe",
 	"streams" : [
 		{
-			"feed_id" : <unique ID of publisher owning the new stream to unsubscribe from; optional>,
+			"feed" : <unique ID of publisher owning the new stream to unsubscribe from; optional>,
 			"mid" : "<unique mid of the publisher stream to unsubscribe from; optional>"
 			"sub_mid" : "<unique mid of the subscriber stream to unsubscribe; optional>"
 		},
@@ -3546,10 +3546,13 @@ static void janus_videoroom_notify_about_publisher(janus_videoroom_publisher *p,
 	json_object_set_new(pub, "videoroom", json_string("event"));
 	json_object_set_new(pub, "room", string_ids ? json_string(p->room_id_str) : json_integer(p->room_id));
 	json_object_set_new(pub, "publishers", list);
-	if(p->room) {
-		janus_mutex_lock(&p->room->mutex);
+ 	janus_videoroom *room = p->room;
+ 	if(room && !g_atomic_int_get(&room->destroyed)) {
+ 		janus_refcount_increase(&room->ref);
+ 		janus_mutex_lock(&room->mutex);
 		janus_videoroom_notify_participants(p, pub, FALSE);
-		janus_mutex_unlock(&p->room->mutex);
+		janus_mutex_unlock(&room->mutex);
+ 		janus_refcount_decrease(&room->ref);
 	}
 	json_decref(pub);
 	/* Also notify event handlers */
@@ -6026,7 +6029,7 @@ static json_t *janus_videoroom_process_synchronous_request(janus_videoroom_sessi
 		/* Lookup room */
 		janus_mutex_lock(&rooms_mutex);
 		janus_videoroom *videoroom = NULL;
-		error_code = janus_videoroom_access_room(root, FALSE, TRUE, &videoroom, error_cause, sizeof(error_cause));
+		error_code = janus_videoroom_access_room(root, TRUE, FALSE, &videoroom, error_cause, sizeof(error_cause));
 		if(error_code != 0) {
 			JANUS_LOG(LOG_ERR, "Failed to access videoroom\n");
 			janus_mutex_unlock(&rooms_mutex);
@@ -7853,8 +7856,9 @@ static void *janus_videoroom_handler(void *data) {
 						if(stream && ps->type == JANUS_VIDEOROOM_MEDIA_VIDEO &&
 								(spatial || sc_substream || temporal || sc_temporal || sc_fallback)) {
 							/* Override the default spatial/substream/temporal targets */
-							if(sc_substream)
-								stream->sim_context.substream_target = json_integer_value(sc_substream);
+							int substream_target = sc_substream ? json_integer_value(sc_substream) : -1;
+							if(sc_substream && substream_target >= 0 && substream_target <= 2)
+								stream->sim_context.substream_target = substream_target;
 							if(sc_temporal)
 								stream->sim_context.templayer_target = json_integer_value(sc_temporal);
 							if(sc_fallback)
@@ -7892,8 +7896,9 @@ static void *janus_videoroom_handler(void *data) {
 							if(stream && ps->type == JANUS_VIDEOROOM_MEDIA_VIDEO &&
 									(spatial || sc_substream || temporal || sc_temporal)) {
 								/* Override the default spatial/substream/temporal targets */
-								if(sc_substream)
-									stream->sim_context.substream_target = json_integer_value(sc_substream);
+								int substream_target = sc_substream ? json_integer_value(sc_substream) : -1;
+								if(sc_substream && substream_target >= 0 && substream_target <= 2)
+									stream->sim_context.substream_target = substream_target;
 								if(sc_temporal)
 									stream->sim_context.templayer_target = json_integer_value(sc_temporal);
 								if(spatial)
@@ -8529,8 +8534,9 @@ static void *janus_videoroom_handler(void *data) {
 							if(ps->type == JANUS_VIDEOROOM_MEDIA_VIDEO &&
 									(spatial || sc_substream || temporal || sc_temporal)) {
 								/* Override the default spatial/substream/temporal targets */
-								if(sc_substream)
-									stream->sim_context.substream_target = json_integer_value(sc_substream);
+								int substream_target = sc_substream ? json_integer_value(sc_substream) : -1;
+								if(sc_substream && substream_target >= 0 && substream_target <= 2)
+									stream->sim_context.substream_target = substream_target;
 								if(sc_temporal)
 									stream->sim_context.templayer_target = json_integer_value(sc_temporal);
 								if(sc_fallback)
@@ -8557,8 +8563,9 @@ static void *janus_videoroom_handler(void *data) {
 								if(ps->type == JANUS_VIDEOROOM_MEDIA_VIDEO &&
 										(spatial || sc_substream || temporal || sc_temporal)) {
 									/* Override the default spatial/substream/temporal targets */
-									if(sc_substream)
-										stream->sim_context.substream_target = json_integer_value(sc_substream);
+									int substream_target = sc_substream ? json_integer_value(sc_substream) : -1;
+									if(sc_substream && substream_target >= 0 && substream_target <= 2)
+										stream->sim_context.substream_target = substream_target;
 									if(sc_temporal)
 										stream->sim_context.templayer_target = json_integer_value(sc_temporal);
 									if(sc_fallback)
@@ -8883,8 +8890,9 @@ static void *janus_videoroom_handler(void *data) {
 					}
 					/* Check if a simulcasting-related request is involved */
 					if(ps && ps->simulcast) {
-						if(sc_substream) {
-							stream->sim_context.substream_target = json_integer_value(sc_substream);
+						int substream_target = sc_substream ? json_integer_value(sc_substream) : -1;
+						if(sc_substream && substream_target >= 0 && substream_target <= 2) {
+							stream->sim_context.substream_target = substream_target;
 							JANUS_LOG(LOG_VERB, "Setting video SSRC to let through (simulcast): %"SCNu32" (index %d, was %d)\n",
 								ps->vssrc[stream->sim_context.substream],
 								stream->sim_context.substream_target,
@@ -9741,6 +9749,8 @@ static void *janus_videoroom_handler(void *data) {
 								}
 							}
 							mdir = (ps->vcodec != JANUS_VIDEOCODEC_NONE ? JANUS_SDP_RECVONLY : JANUS_SDP_INACTIVE);
+						} else if(m->type == JANUS_SDP_APPLICATION) {
+							mdir = JANUS_SDP_RECVONLY;
 						}
 					}
 					ps->disabled = (mdir == JANUS_SDP_INACTIVE);
@@ -10219,8 +10229,8 @@ static void janus_videoroom_relay_data_packet(gpointer data, gpointer user_data)
 			!g_atomic_int_get(&stream->subscriber->session->started) ||
 			!g_atomic_int_get(&stream->subscriber->session->dataready))
 		return;
-	janus_videoroom_publisher_stream *ps = stream->publisher_streams->data;
-	if(ps != packet->source || ps->publisher == NULL)
+	janus_videoroom_publisher_stream *ps = packet->source;
+	if(ps->publisher == NULL || g_slist_find(stream->publisher_streams, ps) == NULL)
 		return;
 	janus_videoroom_subscriber *subscriber = stream->subscriber;
 	janus_videoroom_session *session = subscriber->session;
